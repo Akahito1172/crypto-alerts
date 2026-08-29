@@ -11,9 +11,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "")
 
-EXCHANGE_ID = os.getenv("EXCHANGE_ID", "binance")
-# ปรับเป็นสแกน Top 100 จาก CMC
-TOP_N_CMC = int(os.getenv("TOP_N_CMC", "100")) 
+EXCHANGE_ID = os.getenv("EXCHANGE_ID", "okx")
+TOP_N_CMC = int(os.getenv("TOP_N_CMC", "200")) 
 CAPITAL_USDT = float(os.getenv("CAPITAL_USDT", "280"))
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
 MAX_ALERTS = int(os.getenv("MAX_ALERTS", "10"))
@@ -74,11 +73,10 @@ def add_indicators(df):
     out["score"] = conditions.sum(axis=1)
     return out
 
-# --- ฟังก์ชันดึงข้อมูลจาก CMC API ---
 def get_cmc_top_symbols(exchange, limit=100):
     if not CMC_API_KEY:
-        print("No CMC API Key found. Fallback to Binance volume filter.")
-        return get_binance_volume_filter(exchange, limit)
+        print("No CMC API Key found. Fallback to volume filter.")
+        return get_volume_filter(exchange, limit)
 
     url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
     headers = {'X-CMC_PRO_API_KEY': CMC_API_KEY}
@@ -88,32 +86,25 @@ def get_cmc_top_symbols(exchange, limit=100):
         response = requests.get(url, headers=headers, params=params, timeout=15)
         data = response.json()
         if 'data' not in data:
-            print(f"CMC API Error: {data.get('status', {}).get('error_message', 'Unknown')}")
-            return get_binance_volume_filter(exchange, limit)
-        
-        # ดึงเฉพาะ Symbol เช่น BTC, ETH
+            print(f"CMC API Error. Fallback.")
+            return get_volume_filter(exchange, limit)
         cmc_symbols_raw = [coin['symbol'] for coin in data['data']]
     except Exception as e:
         print(f"CMC Request Exception: {e}")
-        return get_binance_volume_filter(exchange, limit)
+        return get_volume_filter(exchange, limit)
 
-    # แปลงเป็นคู่เทรดของ Binance และตรวจสอบว่าเปิดให้เทรด Spot USDT หรือไม่
     if not exchange.markets: exchange.load_markets()
-    
     stables = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP", "EUR", "GBP", "TRY", "BRL"}
     valid_symbols = []
-    
     for sym in cmc_symbols_raw:
         if sym in stables: continue
         pair = f"{sym}/USDT"
         if pair in exchange.markets and exchange.markets[pair].get("active") is True:
             valid_symbols.append(pair)
-            
-    print(f"Successfully mapped {len(valid_symbols)} CMC Top coins to Binance.")
+    print(f"Mapped {len(valid_symbols)} CMC coins.")
     return valid_symbols
 
-def get_binance_volume_filter(exchange, top_n):
-    # ระบบสำรองกรณี CMC ล่ม
+def get_volume_filter(exchange, top_n):
     tickers = exchange.fetch_tickers()
     rows = []
     for symbol, ticker in tickers.items():
@@ -171,8 +162,7 @@ def make_alert(exchange, symbol, kind, row, reasons):
             lines.append(f"🎯 TP1: {fmt(tp1)} | ปิดบางส่วน/เลื่อน Stop เป็นทุน")
             lines.append(f"🎯 TP2: {fmt(tp2)} | ปิดบางส่วน/เริ่ม Trailing")
             lines.append(f"🎯 TP3: {fmt(tp3)} | ปิดที่เหลือ")
-            lines.append(f"Trailing: High ล่าสุด - {fmt(stop_distance)}")
-            if notional < min_cost: lines.append(f"⚠️ เตือน: ขนาดต่ำกว่าขั้นต่ำ Binance ({fmt(min_cost)} USDT) ใช้ดูเป็นแนวทางเท่านั้น")
+            if notional < min_cost: lines.append(f"⚠️ เตือน: ขนาดต่ำกว่าขั้นต่ำ Exchange ({fmt(min_cost)} USDT)")
     else:
         lines.append("สถานะ: พิจารณาออก/ลดไม้/เฝ้าระวัง")
         if stop_distance > 0: lines.append(f"แนวระวัง: {fmt(stop)}")
@@ -217,13 +207,13 @@ def main():
     symbols = get_cmc_top_symbols(exchange, TOP_N_CMC)
     if not symbols: return
     
-    print(f"Scanning {len(symbols)} CMC Top coins on Binance...")
+    print(f"Scanning {len(symbols)} CMC Top coins...")
     all_alerts = []
     for symbol in symbols:
         try:
             alerts = process_symbol(exchange, symbol)
             all_alerts.extend(alerts)
-            time.sleep(0.2) # หน่วงเวลาป้องกัน Binance บล็อก IP
+            time.sleep(0.2)
         except Exception as e:
             print(f"ERROR {symbol}: {e}")
 
@@ -236,7 +226,16 @@ def main():
             send_telegram(alert["text"])
             time.sleep(1.2)
     else:
-        print("No strong signals found in CMC Top 100 this round.")
+        # 🌟 ระบบรายงานตัว (Heartbeat)
+        heartbeat_msg = (
+            f"🤖 บอทยังทำงานอยู่นะครับ\n"
+            f"เวลา: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n"
+            f"สแกนไป {len(symbols)} เหรียญจาก CMC\n"
+            f"ยังไม่พบจังหวะที่ปลอดภัยในขณะนี้ ✅\n"
+            f"(รักษาเงินต้นคือสิ่งสำคัญที่สุดครับ)"
+        )
+        send_telegram(heartbeat_msg)
+        print("No strong signals. Sent heartbeat.")
 
 if __name__ == "__main__":
     main()
