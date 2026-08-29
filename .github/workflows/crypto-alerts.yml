@@ -33,7 +33,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CMC_API_KEY: ${{ secrets.CMC_API_KEY }}
           EXCHANGE_ID: okx
-          TOP_N_CMC: "100"
+          TOP_N_CMC: "200"
           CAPITAL_USDT: "280"
           RISK_PER_TRADE_PCT: "0.5"
           MAX_ALERTS: "10"
