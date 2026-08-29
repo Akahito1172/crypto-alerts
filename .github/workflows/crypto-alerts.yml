@@ -32,7 +32,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CMC_API_KEY: ${{ secrets.CMC_API_KEY }}
-          EXCHANGE_ID: binance
+          EXCHANGE_ID: bybit
           TOP_N_CMC: "100"
           CAPITAL_USDT: "280"
           RISK_PER_TRADE_PCT: "0.5"
