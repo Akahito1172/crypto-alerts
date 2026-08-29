@@ -1,0 +1,41 @@
+name: Crypto Alerts
+
+on:
+  schedule:
+    # รันนาทีที่ 5 ทุก 4 ชั่วโมงตามเวลา UTC
+    - cron: "5 */4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: crypto-alerts
+  cancel-in-progress: false
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir ccxt pandas numpy requests
+
+      - name: Run crypto alert bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CMC_API_KEY: ${{ secrets.CMC_API_KEY }}
+          EXCHANGE_ID: binance
+          TOP_N_CMC: "100"
+          CAPITAL_USDT: "280"
+          RISK_PER_TRADE_PCT: "0.5"
+          MAX_ALERTS: "10"
+          BUY_SCORE: "4"
+        run: python main.py
