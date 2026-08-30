@@ -13,6 +13,7 @@ CMC_API_KEY = os.getenv("CMC_API_KEY", "")
 
 EXCHANGE_ID = os.getenv("EXCHANGE_ID", "okx")
 TOP_N_CMC = int(os.getenv("TOP_N_CMC", "200")) 
+SNIPER_TARGETS = int(os.getenv("SNIPER_TARGETS", "15")) # เลือกมาวิเคราะห์ลึกแค่ 15 ตัว
 CAPITAL_USDT = float(os.getenv("CAPITAL_USDT", "280"))
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
 MAX_ALERTS = int(os.getenv("MAX_ALERTS", "10"))
@@ -73,50 +74,57 @@ def add_indicators(df):
     out["score"] = conditions.sum(axis=1)
     return out
 
-def get_cmc_top_symbols(exchange, limit=100):
-    if not CMC_API_KEY:
-        print("No CMC API Key found. Fallback to volume filter.")
-        return get_volume_filter(exchange, limit)
-
-    url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
-    headers = {'X-CMC_PRO_API_KEY': CMC_API_KEY}
-    params = {'start': 1, 'limit': limit, 'convert': 'USD'}
-
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
-        data = response.json()
-        if 'data' not in data:
-            print(f"CMC API Error. Fallback.")
-            return get_volume_filter(exchange, limit)
-        cmc_symbols_raw = [coin['symbol'] for coin in data['data']]
-    except Exception as e:
-        print(f"CMC Request Exception: {e}")
-        return get_volume_filter(exchange, limit)
+def get_sniper_targets(exchange, limit_cmc, targets):
+    # 1. ดึงรายชื่อจาก CMC หรือ fallback
+    cmc_symbols = []
+    if CMC_API_KEY:
+        url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
+        headers = {'X-CMC_PRO_API_KEY': CMC_API_KEY}
+        params = {'start': 1, 'limit': limit_cmc, 'convert': 'USD'}
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=15)
+            data = response.json()
+            if 'data' in data:
+                cmc_symbols = [coin['symbol'] for coin in data['data']]
+        except: pass
 
     if not exchange.markets: exchange.load_markets()
     stables = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP", "EUR", "GBP", "TRY", "BRL"}
-    valid_symbols = []
-    for sym in cmc_symbols_raw:
+    
+    valid_pairs = []
+    for sym in cmc_symbols:
         if sym in stables: continue
         pair = f"{sym}/USDT"
         if pair in exchange.markets and exchange.markets[pair].get("active") is True:
-            valid_symbols.append(pair)
-    print(f"Mapped {len(valid_symbols)} CMC coins.")
-    return valid_symbols
+            valid_pairs.append(pair)
+            
+    if not valid_pairs:
+        # Fallback ถ้า CMC ไม่ทำงาน
+        valid_pairs = [s for s in exchange.markets.keys() if s.endswith("/USDT") and not s.startswith(tuple(stables))]
 
-def get_volume_filter(exchange, top_n):
+    # 2. กวาดวอลลุ่มแบบรวดเร็ว (ใช้ API แค่ 1-2 ครั้ง)
+    print(f"Radar sweeping {len(valid_pairs)} pairs for volume spikes...")
     tickers = exchange.fetch_tickers()
-    rows = []
-    for symbol, ticker in tickers.items():
-        if symbol.endswith("/USDT") and not symbol.startswith(("USD", "EUR", "GBP")):
-            qv = ticker.get("quoteVolume") or 0
-            rows.append((symbol, float(qv)))
-    rows.sort(key=lambda x: x[1], reverse=True)
-    return [r[0] for r in rows[:top_n]]
+    
+    scored = []
+    for pair in valid_pairs:
+        if pair in tickers:
+            t = tickers[pair]
+            qv = float(t.get("quoteVolume") or 0)
+            pct = abs(float(t.get("percentage") or 0)) # ดูความผันผวน
+            # ให้คะแนนจาก วอลลุ่ม + ความผันผวน
+            score = qv + (qv * (pct / 100)) 
+            scored.append((pair, score))
+            
+    scored.sort(key=lambda x: x[1], reverse=True)
+    
+    # 3. ล็อคเป้า 15 ตัวที่ฮอตที่สุด
+    top_targets = [s[0] for s in scored[:targets]]
+    print(f"Sniper locked on {len(top_targets)} targets: {', '.join(top_targets)}")
+    return top_targets
 
 def get_min_cost(exchange, symbol):
     try:
-        if not exchange.markets: exchange.load_markets()
         market = exchange.market(symbol)
         min_cost = market.get("limits", {}).get("cost", {}).get("min")
         if min_cost is not None: return float(min_cost)
@@ -204,16 +212,17 @@ def process_symbol(exchange, symbol):
 def main():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     exchange = get_exchange()
-    symbols = get_cmc_top_symbols(exchange, TOP_N_CMC)
+    
+    # ใช้ระบบ Sniper ล็อคเป้าแค่ 15 ตัวที่วอลลุ่มเข้า
+    symbols = get_sniper_targets(exchange, TOP_N_CMC, SNIPER_TARGETS)
     if not symbols: return
     
-    print(f"Scanning {len(symbols)} CMC Top coins...")
     all_alerts = []
     for symbol in symbols:
         try:
             alerts = process_symbol(exchange, symbol)
             all_alerts.extend(alerts)
-            time.sleep(0.2)
+            time.sleep(0.1) # เร็วขึ้นเพราะสแกนน้อยลง
         except Exception as e:
             print(f"ERROR {symbol}: {e}")
 
@@ -224,18 +233,16 @@ def main():
     if selected:
         for alert in selected:
             send_telegram(alert["text"])
-            time.sleep(1.2)
+            time.sleep(1.0)
     else:
-        # 🌟 ระบบรายงานตัว (Heartbeat)
         heartbeat_msg = (
-            f"🤖 บอทยังทำงานอยู่นะครับ\n"
+            f"🤖 บอทรายงานตัว (Sniper Mode)\n"
             f"เวลา: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n"
-            f"สแกนไป {len(symbols)} เหรียญจาก CMC\n"
-            f"ยังไม่พบจังหวะที่ปลอดภัยในขณะนี้ ✅\n"
-            f"(รักษาเงินต้นคือสิ่งสำคัญที่สุดครับ)"
+            f"ล็อคเป้า {len(symbols)} เหรียญฮอต\n"
+            f"ยังไม่พบจังหวะที่ปลอดภัย ✅"
         )
         send_telegram(heartbeat_msg)
-        print("No strong signals. Sent heartbeat.")
+        print("Sent heartbeat.")
 
 if __name__ == "__main__":
     main()
