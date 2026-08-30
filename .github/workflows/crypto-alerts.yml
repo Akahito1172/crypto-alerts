@@ -3,7 +3,7 @@ name: Crypto Alerts
 on:
   schedule:
     # รันนาทีที่ 5 ทุก 4 ชั่วโมงตามเวลา UTC
-    - cron: "5 * * * *"
+       - cron: "*/15 * * * *"
   workflow_dispatch:
 
 concurrency:
